@@ -245,30 +245,63 @@ Then write a validation script data/validate_dataset.py that loads the CSV with 
 **Prompt:**
 
 ```
-Implement src/intake_questions.py for adaptive intake. It must not call any LLM.
+Implement the evaluation harness. Do not break existing tests.
 
-1. Define a Pydantic model Question: id (str), group (str), text (str), answer_type ("yes_no" or "text"), red_flag_if (optional str, e.g. "yes"), reason (optional str, shown when it triggers).
+1. In src/triage.py add call_llm_with_meta(message, follow_up, model, prompt_version) -> tuple[LLMTriageOutput, dict] where the dict has attempts (int), used_fallback (bool), latency_s (float). Keep call_llm's current signature and behavior (it can delegate to the new function).
 
-2. Define SYMPTOM_QUESTIONS: dict mapping symptom group -> list[Question], with 2 to 3 questions per group for: sore_throat, cough, fever, headache, abdominal_pain, rash, back_pain, dizziness, injury, medication_refill. Include red-flag yes/no questions where clinically sensible, for example:
-   - sore_throat: fever? difficulty breathing or swallowing, or drooling (red flag)?
-   - cough: shortness of breath (red flag)? coughing up blood (red flag)? how many days?
-   - headache: sudden severe "worst headache of my life" (red flag)? stiff neck or confusion (red flag)?
-   - abdominal_pain: severe constant pain (red flag)? vomiting blood or black stools (red flag)?
-   - back_pain: numbness or weakness in legs, or loss of bladder control (red flag)?
-   - rash: swelling of face, lips, or tongue (red flag)? fever?
-   - medication_refill: how many days of medication are left? any side effects?
+2. Create eval/run_eval.py with argparse options: --models (space-separated, default llama3.2:3b), --prompt-versions (default v1), --split (dev, test, or all; default dev), --limit (optional int for quick runs).
+   For each model x prompt version:
+   - Do one warm-up ollama call first and exclude it from timing.
+   - For every message in data/synthetic_messages.csv for the chosen split, run the full pipeline via src/triage.py, record: id, model, prompt_version, predicted intent, urgency, route, red_flag, used_fallback, attempts, latency_s, plus the expected labels.
+   - Also, for red-flag messages, run call_llm_with_meta directly (bypassing the rules layer) and record the LLM-only urgency in a column llm_only_urgency.
+   - Compute: intent accuracy, urgency accuracy, route accuracy, under-triage rate (predicted urgency rank below expected), over-triage rate, pipeline red-flag recall (expected emergencies predicted as emergency), llm-only emergency recall, JSON validity rate (1 - fallback rate), median and p95 latency.
+   - Save per-message predictions to results/predictions_{model}_{version}_{split}.csv (replace ':' in model names) and append one summary row per run to results/summary.csv. Print a markdown table of the summary.
+   - Handle a failing model call gracefully and continue.
 
-3. Define SYMPTOM_PATTERNS: dict group -> list of compiled regexes that detect each group in a message (include common phrasings, e.g. "sore throat", "throat hurts", "coughing", "temperature", "stomach ache", "tummy pain", "lower back pain", "feel dizzy", "need a refill").
+3. Create eval/baseline.py: TF-IDF (word 1-2 grams) + LogisticRegression for intent and for urgency, trained on dev, evaluated on test, same metrics where applicable (accuracy and under-triage rate; latency is the mean prediction time). Print a table and append a row with model "tfidf_logreg" to results/summary.csv. Add a comment noting the training set is only 28 messages.
 
-4. get_follow_up_questions(message: str, max_questions: int = 3) -> list[Question]: normalize text, detect groups, collect their questions, put red-flag questions first, remove duplicates, cap at max_questions. Return [] if no group matches.
+4. Add tests/test_eval_metrics.py for the metric functions (accuracy, under-triage and over-triage with the urgency ordering routine < soon < urgent < emergency, p95), with small hand-built examples. Put metric functions in eval/metrics.py so they can be tested without a model.
+```
 
-5. evaluate_answers(answers: list[tuple[Question, str]]) -> RedFlag (from src/schema.py): if any answer matches that question's red_flag_if (treat yes, y, yeah, yep, true, "yes i do" as yes; case-insensitive), return is_red_flag=True with a reason naming the question. Otherwise False. Unclear answers must not trigger.
+**Output / result:** (accuracy, red-flag recall, JSON validity)
+**Problem:**
+**Follow-up prompt:**
 
-6. to_follow_up_answers(answers) -> list[FollowUpAnswer] converting to the schema model.
+```
+eval/run_eval.py gives no output while running, so I can't tell whether it is slow or stuck. Improve it:
+1. Print one progress line per message as it finishes: index/total, message id, predicted vs expected urgency, and latency in seconds.
+2. Add a request timeout of 120 seconds to the ollama client calls, so a stuck call fails and is recorded as a failure instead of hanging forever.
+3. Print the model's processor info or a note at the start reminding to run `ollama ps` if latency is high.
+4. Make sure Ctrl+C stops cleanly and still writes the partial predictions collected so far.
+Do not break existing tests.
+```
+**New result:**
+**What I learned:**
 
-7. Write tests/test_intake_questions.py: each group detected by at least 2 phrasings; cap of 3 enforced; red-flag questions ordered first; no match returns []; yes variants trigger; "no" and unclear answers do not; to_follow_up_answers output is valid.
+---
 
-Keep code typed and documented.
+
+## Entry 03: Triage system prompt v1
+
+**Type:** System prompt (triage LLM)
+**Date:**
+**Goal:** First working classification prompt returning strict JSON.
+
+**Prompt:**
+
+```
+Implement src/db.py, a SQLite persistence layer for TriageRecord (from src/schema.py). Use only the standard library sqlite3. Do not break existing tests.
+
+1. DEFAULT_DB_PATH = "data/triage.db". All functions accept an optional db_path argument.
+2. init_db(db_path) creates table triage_records if missing with columns: id TEXT PRIMARY KEY, received_at TEXT, original_message TEXT, status TEXT, final_reply TEXT NULL, model TEXT, prompt_version TEXT, latency_s REAL, intent TEXT, urgency TEXT, route_to TEXT, is_red_flag INTEGER, result_json TEXT. Add indexes on status and route_to.
+3. save_record(record: TriageRecord, model: str, prompt_version: str, latency_s: float, db_path=...) -> None
+4. get_record(record_id, db_path=...) -> TriageRecord | None, rebuilt from result_json
+5. list_records(status: str | None = None, route_to: str | None = None, db_path=...) -> list[TriageRecord], ordered with urgency emergency > urgent > soon > routine first, then oldest first
+6. update_status(record_id, status: "approved" | "rejected", final_reply: str | None = None, db_path=...) -> bool (False if the id does not exist; reject any other status value with ValueError)
+7. get_stats(db_path=...) -> dict with counts by status, by route_to, by urgency, red flag count, and average latency
+8. Use parameterized queries only. Close connections properly.
+
+Write tests/test_db.py using pytest tmp_path: init is idempotent, save then get round-trips equal, list ordering and filtering, update_status success and unknown id, invalid status raises, stats counts correct.
 ```
 
 **Output / result:** (accuracy, red-flag recall, JSON validity)
@@ -289,30 +322,17 @@ Keep code typed and documented.
 **Prompt:**
 
 ```
-Implement src/intake_questions.py for adaptive intake. It must not call any LLM.
+Implement app.py, a Streamlit app for the clinic triage agent, using src/triage.py (triage_message), src/intake_questions.py (get_follow_up_questions, evaluate_answers, to_follow_up_answers), src/red_flags.py, and src/db.py. No LLM calls at import time. Keep logic in src/ modules where possible; app.py should be mostly UI.
 
-1. Define a Pydantic model Question: id (str), group (str), text (str), answer_type ("yes_no" or "text"), red_flag_if (optional str, e.g. "yes"), reason (optional str, shown when it triggers).
+Layout:
+- st.set_page_config with a clear title. Persistent disclaimer in the sidebar: "Prototype. Synthetic data only. Not a medical device and not medical advice."
+- Sidebar: model selectbox (default llama3.2:3b, options from a MODELS list constant), prompt version selectbox from src/prompts.PROMPTS, and a selectbox of 6 sample patient messages (include one emergency, one refill, one two-symptom message) that fills the message box.
+- Tab "Patient intake": step 1 text area for the message and a Next button. Step 2: call get_follow_up_questions and show each question as a radio (yes/no) or text input; if there are none, go straight to submit. Step 3: Submit runs triage_message inside st.spinner, saves the record with save_record, and shows the result: urgency badge, route, summary, extracted contact, and the draft reply. If the result is a red flag, show st.error with EMERGENCY_MESSAGE at the top. Use st.session_state to hold the step so reruns do not lose state. Add a "Start new message" button.
+- Tab "Staff queue": a selectbox to filter by role (all, on_call_clinician, pharmacist_or_ma, front_desk), listing pending records via list_records. Each record in an expander titled with urgency, intent and time; inside show the original message, summary, red-flag reason if any, follow-up Q&A, and an editable text area prefilled with the draft reply. Approve saves the edited text as final_reply, Reject marks rejected; both refresh the list. Show red-flag records first with a red marker.
+- Tab "Dashboard": st.metric tiles (total, pending, red flags, avg latency) and bar charts for counts by route, urgency and status from get_stats.
+- Call init_db on startup. Wrap the model call in try/except and show a friendly st.error on failure instead of crashing.
 
-2. Define SYMPTOM_QUESTIONS: dict mapping symptom group -> list[Question], with 2 to 3 questions per group for: sore_throat, cough, fever, headache, abdominal_pain, rash, back_pain, dizziness, injury, medication_refill. Include red-flag yes/no questions where clinically sensible, for example:
-   - sore_throat: fever? difficulty breathing or swallowing, or drooling (red flag)?
-   - cough: shortness of breath (red flag)? coughing up blood (red flag)? how many days?
-   - headache: sudden severe "worst headache of my life" (red flag)? stiff neck or confusion (red flag)?
-   - abdominal_pain: severe constant pain (red flag)? vomiting blood or black stools (red flag)?
-   - back_pain: numbness or weakness in legs, or loss of bladder control (red flag)?
-   - rash: swelling of face, lips, or tongue (red flag)? fever?
-   - medication_refill: how many days of medication are left? any side effects?
-
-3. Define SYMPTOM_PATTERNS: dict group -> list of compiled regexes that detect each group in a message (include common phrasings, e.g. "sore throat", "throat hurts", "coughing", "temperature", "stomach ache", "tummy pain", "lower back pain", "feel dizzy", "need a refill").
-
-4. get_follow_up_questions(message: str, max_questions: int = 3) -> list[Question]: normalize text, detect groups, collect their questions, put red-flag questions first, remove duplicates, cap at max_questions. Return [] if no group matches.
-
-5. evaluate_answers(answers: list[tuple[Question, str]]) -> RedFlag (from src/schema.py): if any answer matches that question's red_flag_if (treat yes, y, yeah, yep, true, "yes i do" as yes; case-insensitive), return is_red_flag=True with a reason naming the question. Otherwise False. Unclear answers must not trigger.
-
-6. to_follow_up_answers(answers) -> list[FollowUpAnswer] converting to the schema model.
-
-7. Write tests/test_intake_questions.py: each group detected by at least 2 phrasings; cap of 3 enforced; red-flag questions ordered first; no match returns []; yes variants trigger; "no" and unclear answers do not; to_follow_up_answers output is valid.
-
-Keep code typed and documented.
+Also add a short "How to run" section to README.md. Do not break existing tests.
 ```
 
 **Output / result:** (accuracy, red-flag recall, JSON validity)
