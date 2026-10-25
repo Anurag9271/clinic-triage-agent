@@ -33,7 +33,16 @@ This file records every significant prompt used to build the project, including 
 **Prompt:**
 
 ```
-I'm building a clinic inbox triage agent in Python using Streamlit, Pydantic, and Ollama (local LLMs). Create the project folder structure and a Pydantic schema in src/schema.py with these fields: intent (appointment, refill, test_results, administrative, general_query, other), urgency (routine, soon, urgent, emergency), route_to, suggested_specialty, red_flag (bool + reason), follow_up, contact, summary, draft_reply. Don't implement the LLM calls yet.
+I'm building a clinic inbox triage agent in Python 3.12 using Streamlit, Pydantic v2, and Ollama (local LLMs). The project folder structure and virtual environment already exist. Do not recreate them.
+
+Implement src/schema.py with Pydantic v2 models:
+- Enums: Intent (appointment, refill, test_results, administrative, general_query, other), Urgency (routine, soon, urgent, emergency), RouteTo (on_call_clinician, pharmacist_or_ma, front_desk)
+- RedFlag: is_red_flag (bool), reason (str or None)
+- Contact: name, phone, email (all optional)
+- FollowUpAnswer: question (str), answer (str)
+- TriageResult: intent, urgency, route_to, suggested_specialty (optional), red_flag, follow_up (list of FollowUpAnswer), contact, summary (one sentence), draft_reply
+
+Add docstrings and short field descriptions. Do not implement any LLM calls yet. Then write tests/test_schema.py with pytest covering valid input, invalid enum values, and missing required fields.
 ```
 
 **Output / result:**
@@ -53,12 +62,29 @@ I'm building a clinic inbox triage agent in Python using Streamlit, Pydantic, an
 **Prompt:**
 
 ```
-(paste here)
+Implement src/red_flags.py with a rule-based emergency detector. It must not call any LLM.
+
+Requirements:
+1. check_red_flags(text: str) -> RedFlag (from src/schema.py). Normalize text (lowercase, strip punctuation, collapse whitespace) before matching.
+2. Define pattern groups as a dict of category -> list of compiled regexes: cardiac, respiratory, neurological, severe_bleeding, anaphylaxis, overdose_poisoning, mental_health_crisis. Cover paraphrases, for example "can't catch my breath", "tightness in my chest", "face is drooping", "thinking of ending my life", not just exact keywords.
+3. If any pattern matches, return is_red_flag=True with a reason naming the category and the matched phrase. If nothing matches, return is_red_flag=False.
+4. Err on the side of over-triage: do not try to suppress negations in free text.
+5. Add a module-level EMERGENCY_MESSAGE constant telling the patient to call emergency services immediately.
+6. Write tests/test_red_flags.py with at least 8 messages per category that must trigger, 10 ordinary messages that must not (refills, billing, appointment requests, test results), and paraphrase cases. Use pytest parametrize.
 ```
 
 **Output / result:**
 **Problem:**
 **Follow-up prompt:**
+
+```
+Testing found a missed case in src/red_flags.py: "my chest feels heavy" is not detected. Fix this by broadening the cardiac patterns to cover chest heaviness and pressure phrasings, for example: heavy chest, chest feels heavy, weight on my chest, pressure in my chest, squeezing or crushing chest, chest feels tight, pain in my left arm or jaw.
+
+Then audit all categories for similar paraphrase gaps and add patterns for: sudden severe or "worst ever" headache, coughing up blood, passed out or unconscious, not breathing or turning blue, seizure or convulsion, can't feel my arm or leg, sudden vision loss, thoughts of hurting myself or suicide.
+
+Add each of these phrasings as must-trigger test cases in tests/test_red_flags.py. Keep the existing must-not-trigger cases passing, and add these as must-not-trigger: "heavy menstrual bleeding question for my next visit" is acceptable to flag, but "need a refill", "reschedule my appointment", and "question about my bill" must not.
+```
+
 **New result:**
 **What I learned:**
 
