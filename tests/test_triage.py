@@ -88,7 +88,9 @@ def test_call_llm_valid_json(valid_llm_json: str):
         # Verify ollama.chat arguments
         call_kwargs = mock_chat.call_args.kwargs
         assert call_kwargs["model"] == "llama3.2:3b"
-        assert call_kwargs["options"] == {"temperature": 0}
+        assert call_kwargs["options"]["temperature"] == 0
+        assert call_kwargs["options"]["num_predict"] == 300
+        assert call_kwargs.get("keep_alive") == "30m" or call_kwargs["options"].get("keep_alive") == "30m"
         assert call_kwargs["format"] == LLMTriageOutput.model_json_schema()
         messages = call_kwargs["messages"]
         assert len(messages) == 2

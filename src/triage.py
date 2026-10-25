@@ -40,6 +40,9 @@ logger = logging.getLogger(__name__)
 
 MAX_VALIDATION_RETRIES: Final[int] = 2
 DEFAULT_OLLAMA_TIMEOUT: Final[float] = 120.0
+DEFAULT_NUM_PREDICT: int = 300
+DEFAULT_KEEP_ALIVE: str = "30m"
+DEFAULT_TEMPERATURE: float = 0.0
 
 # Configure default Ollama HTTP client timeout to prevent indefinite hangs
 if hasattr(ollama, "_client") and hasattr(ollama._client, "_client"):
@@ -165,7 +168,12 @@ def call_llm_with_meta(
                     {"role": "user", "content": user_content},
                 ],
                 format=LLMTriageOutput.model_json_schema(),
-                options={"temperature": 0},
+                options={
+                    "temperature": DEFAULT_TEMPERATURE,
+                    "num_predict": DEFAULT_NUM_PREDICT,
+                    "keep_alive": DEFAULT_KEEP_ALIVE,
+                },
+                keep_alive=DEFAULT_KEEP_ALIVE,
             )
             raw_content = _extract_response_content(response)
             output = LLMTriageOutput.model_validate_json(raw_content)
@@ -254,12 +262,14 @@ def triage_message_with_meta(
     prompt_version: str = "v1",
     client: Optional[Any] = None,
     timeout: float = DEFAULT_OLLAMA_TIMEOUT,
+    use_mock: bool = False,
 ) -> tuple[TriageRecord, float, dict[str, Any]]:
     """Execute end-to-end clinical triage returning the record, elapsed time, and execution metadata.
 
     Performs deterministic red-flag screening on the raw message and intake
     answers. If any red flag triggers, bypasses LLM inference entirely and
-    immediately constructs an emergency triage record. Otherwise invokes the LLM.
+    immediately constructs an emergency triage record. Otherwise invokes the LLM
+    or deterministic mock classifier.
 
     Args:
         message: Raw incoming patient message text.
@@ -268,6 +278,7 @@ def triage_message_with_meta(
         prompt_version: Version identifier for system prompt template.
         client: Optional custom Ollama Client instance.
         timeout: Request timeout in seconds.
+        use_mock: If True, bypasses Ollama and uses deterministic keyword mock.
 
     Returns:
         A tuple of (TriageRecord, elapsed_seconds: float, meta: dict).
@@ -324,16 +335,27 @@ def triage_message_with_meta(
         }
         return record, elapsed, meta
 
-    # 4. Standard path: Call LLM, route, and build consolidated triage result
+    # 4. Standard path: Call LLM (or mock), route, and build consolidated triage result
     active_red_flag = RedFlag(is_red_flag=False, reason=None)
-    llm_output, meta = call_llm_with_meta(
-        message=message,
-        follow_up=follow_up_list,
-        model=model,
-        prompt_version=prompt_version,
-        client=client,
-        timeout=timeout,
-    )
+    if use_mock:
+        from src.mock_llm import mock_call_llm
+
+        llm_output, meta = mock_call_llm(
+            message=message,
+            follow_up=follow_up_list,
+            model=model,
+            prompt_version=prompt_version,
+        )
+    else:
+        llm_output, meta = call_llm_with_meta(
+            message=message,
+            follow_up=follow_up_list,
+            model=model,
+            prompt_version=prompt_version,
+            client=client,
+            timeout=timeout,
+        )
+
     routed_to = route(intent=llm_output.intent, urgency=llm_output.urgency)
     triage_result = build_triage_result(
         llm_output=llm_output,
@@ -357,6 +379,7 @@ def triage_message(
     prompt_version: str = "v1",
     client: Optional[Any] = None,
     timeout: float = DEFAULT_OLLAMA_TIMEOUT,
+    use_mock: bool = False,
 ) -> tuple[TriageRecord, float]:
     """Execute end-to-end clinical triage for an incoming patient message.
 
@@ -376,6 +399,7 @@ def triage_message(
         prompt_version: Version identifier for system prompt template.
         client: Optional custom Ollama Client instance.
         timeout: Request timeout in seconds.
+        use_mock: If True, bypasses Ollama and uses deterministic keyword mock.
 
     Returns:
         A tuple of (TriageRecord, elapsed_seconds: float).
@@ -387,12 +411,16 @@ def triage_message(
         prompt_version=prompt_version,
         client=client,
         timeout=timeout,
+        use_mock=use_mock,
     )
     return record, elapsed
 
 
 __all__ = [
+    "DEFAULT_KEEP_ALIVE",
+    "DEFAULT_NUM_PREDICT",
     "DEFAULT_OLLAMA_TIMEOUT",
+    "DEFAULT_TEMPERATURE",
     "MAX_VALIDATION_RETRIES",
     "SAFE_FALLBACK_DRAFT_REPLY",
     "call_llm",

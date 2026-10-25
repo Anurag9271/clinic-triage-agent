@@ -155,6 +155,11 @@ st.markdown(
         color: #334155;
         border: 1px solid #cbd5e1;
     }
+    .badge-mock {
+        background-color: #fef08a;
+        color: #854d0e;
+        border: 1px solid #eab308;
+    }
 
     /* Card Panels */
     .clinical-card {
@@ -226,12 +231,31 @@ st.sidebar.markdown(
 
 st.sidebar.title("⚙️ Triage Settings")
 
+# Fast demo mode checkbox
+fast_demo_mode = st.sidebar.checkbox(
+    "Fast demo mode (mock LLM, no model call)",
+    value=False,
+    key="chk_fast_demo_mode",
+    help="Bypasses local Ollama model calls and uses fast deterministic keyword triage.",
+)
+
+if fast_demo_mode:
+    st.sidebar.markdown(
+        """
+        <div style="text-align: center; margin-top: -6px; margin-bottom: 12px;">
+            <span class="badge badge-mock">⚡ MOCK MODE</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # Model selection
 model_options = MODELS
 selected_model = st.sidebar.selectbox(
     "Inference Model",
     options=model_options,
     index=0,
+    disabled=fast_demo_mode,
     help="Ollama LLM used for structured intent extraction and response drafting.",
 )
 
@@ -241,6 +265,7 @@ selected_prompt_version = st.sidebar.selectbox(
     "Prompt Version",
     options=prompt_versions,
     index=0,
+    disabled=fast_demo_mode,
     help="Version of system instruction prompt used by the triage agent.",
 )
 
@@ -279,8 +304,22 @@ st.sidebar.markdown(
 
 
 # ============================================================================
-# Main Navigation Tabs
+# Main Header & Navigation Tabs
 # ============================================================================
+
+col_head1, col_head2 = st.columns([4, 1])
+with col_head1:
+    st.title("🏥 Clinic Inbox Triage Agent")
+with col_head2:
+    if fast_demo_mode:
+        st.markdown(
+            """
+            <div style="text-align: right; padding-top: 20px;">
+                <span class="badge badge-mock">⚡ MOCK MODE</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 tab_intake, tab_queue, tab_dashboard = st.tabs(
     ["📝 Patient Intake", "📥 Staff Queue", "📊 Dashboard"]
@@ -311,19 +350,30 @@ def _execute_triage(
     answers: Optional[list[tuple[Question, str]]] = None,
 ) -> None:
     """Run triage pipeline, save record, and store result in session state."""
-    with st.spinner("Classifying message with clinical triage pipeline..."):
+    status_label = (
+        "Running fast mock LLM triage..."
+        if fast_demo_mode
+        else "Running local model (this can take up to a minute on this laptop)..."
+    )
+    with st.status(status_label, expanded=True) as status_box:
         try:
             record, latency_s = triage_message(
                 message=message,
                 answers=answers,
                 model=selected_model,
                 prompt_version=selected_prompt_version,
+                use_mock=fast_demo_mode,
             )
             save_record(
                 record=record,
-                model=selected_model,
+                model="mock" if fast_demo_mode else selected_model,
                 prompt_version=selected_prompt_version,
                 latency_s=latency_s,
+            )
+            status_box.update(
+                label=f"Completed in {latency_s:.2f}s",
+                state="complete",
+                expanded=False,
             )
             st.session_state.triage_record = record
             st.session_state.triage_latency = latency_s
@@ -331,10 +381,15 @@ def _execute_triage(
             st.session_state.step = 3
             st.rerun()
         except Exception as exc:
+            status_box.update(
+                label="Triage execution failed",
+                state="error",
+                expanded=True,
+            )
             st.session_state.triage_error = str(exc)
             st.error(
                 f"**Triage Failed:** {exc}\n\n"
-                f"Please verify that Ollama is running and `{selected_model}` is pulled locally."
+                f"Please verify that Ollama is running and `{selected_model}` is available."
             )
 
 
@@ -350,17 +405,13 @@ with tab_intake:
     step = st.session_state.step
     col_s1, col_s2, col_s3 = st.columns(3)
     with col_s1:
-        st.markdown(
-            f"**Step 1: Patient Message** {'✅' if step > 1 else '👉'}"
-        )
+        st.markdown(f"**Step 1: Patient Message** {'✅' if step > 1 else '👉'}")
     with col_s2:
         st.markdown(
             f"**Step 2: Adaptive Questions** {'✅' if step > 2 else ('👉' if step == 2 else '⏳')}"
         )
     with col_s3:
-        st.markdown(
-            f"**Step 3: Triage Result** {'👉' if step == 3 else '⏳'}"
-        )
+        st.markdown(f"**Step 3: Triage Result** {'👉' if step == 3 else '⏳'}")
     st.divider()
 
     # ------------------------------------------------------------------------
@@ -379,7 +430,7 @@ with tab_intake:
 
         col_next, _ = st.columns([1, 4])
         with col_next:
-            if st.button("Next ➔", type="primary", use_container_width=True):
+            if st.button("Next ➔", key="btn_next", type="primary", use_container_width=True):
                 cleaned_msg = message_input.strip()
                 if not cleaned_msg:
                     st.warning("Please enter a patient message to proceed.")
@@ -430,11 +481,16 @@ with tab_intake:
 
         col_back, col_submit = st.columns([1, 2])
         with col_back:
-            if st.button("⬅ Back to Message", use_container_width=True):
+            if st.button("⬅ Back to Message", key="btn_back", use_container_width=True):
                 st.session_state.step = 1
                 st.rerun()
         with col_submit:
-            if st.button("Submit for Triage ➔", type="primary", use_container_width=True):
+            if st.button(
+                "Submit for Triage ➔",
+                key="btn_submit_triage",
+                type="primary",
+                use_container_width=True,
+            ):
                 _execute_triage(st.session_state.message_input, answers=answers)
 
     # ------------------------------------------------------------------------
@@ -444,7 +500,7 @@ with tab_intake:
         record: Optional[TriageRecord] = st.session_state.triage_record
         if record is None:
             st.error("No triage result found in session. Please start a new message.")
-            if st.button("Start New Message"):
+            if st.button("Start New Message", key="btn_start_new_empty"):
                 st.session_state.step = 1
                 st.rerun()
         else:
@@ -458,7 +514,8 @@ with tab_intake:
                     f"*Clinical Red Flag Trigger:* {result.red_flag.reason or 'Critical acute symptom threshold reached.'}"
                 )
 
-            # Metadata bar (Urgency badge, Route badge, Intent, Specialty)
+            # Metadata bar (Urgency badge, Route badge, Intent, Specialty, and Latency)
+            mock_tag = '<span class="badge badge-mock">⚡ MOCK MODE</span>' if fast_demo_mode else ""
             st.markdown(
                 f"""
                 <div class="clinical-card">
@@ -467,15 +524,22 @@ with tab_intake:
                         {_render_route_badge(result.route_to)}
                         <span class="badge badge-intent">INTENT: {result.intent.value.upper()}</span>
                         {f'<span class="badge badge-intent">SPECIALTY: {result.suggested_specialty}</span>' if result.suggested_specialty else ''}
+                        {mock_tag}
                     </div>
-                    <div style="font-size: 0.85rem; color: #64748b;">
-                        Record ID: <code>{record.id}</code> &nbsp;|&nbsp; 
-                        Received: {record.received_at.strftime('%Y-%m-%d %H:%M:%S UTC')} &nbsp;|&nbsp; 
-                        Latency: {st.session_state.triage_latency:.2f}s
+                    <div style="font-size: 0.88rem; color: #475569;">
+                        <strong>Record ID:</strong> <code>{record.id}</code> &nbsp;|&nbsp; 
+                        <strong>Received:</strong> {record.received_at.strftime('%Y-%m-%d %H:%M:%S UTC')} &nbsp;|&nbsp; 
+                        <strong>Inference Latency:</strong> <code>{st.session_state.triage_latency:.2f}s</code>
                     </div>
                 </div>
                 """,
                 unsafe_allow_html=True,
+            )
+
+            # Prominently display the latency of the last run
+            st.markdown(
+                f"⏱️ **Last Run Latency:** `{st.session_state.triage_latency:.2f}s`"
+                + (" *(Fast Mock Mode)*" if fast_demo_mode else "")
             )
 
             # Summary and Extracted Contact Cards
@@ -529,7 +593,7 @@ with tab_intake:
 
             # Reset Button
             st.divider()
-            if st.button("Start new message", type="primary"):
+            if st.button("Start new message", key="btn_new_message", type="primary"):
                 st.session_state.step = 1
                 st.session_state.message_input = ""
                 st.session_state.follow_up_qs = []
@@ -554,6 +618,7 @@ with tab_queue:
             "Filter by Queue Role",
             options=["all", "on_call_clinician", "pharmacist_or_ma", "front_desk"],
             format_func=lambda x: ROLE_LABELS.get(x, x),
+            key="queue_role_select",
             help="Filter pending messages by assigned staff discipline.",
         )
 
@@ -615,7 +680,12 @@ with tab_queue:
 
                 col_approve, col_reject, _ = st.columns([1, 1, 3])
                 with col_approve:
-                    if st.button("Approve & Send", key=f"btn_app_{r.id}", type="primary", use_container_width=True):
+                    if st.button(
+                        "Approve & Send",
+                        key=f"btn_app_{r.id}",
+                        type="primary",
+                        use_container_width=True,
+                    ):
                         update_status(
                             record_id=r.id,
                             status="approved",

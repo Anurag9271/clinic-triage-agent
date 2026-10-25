@@ -7,6 +7,7 @@ updates, and aggregate triage queue statistics using standard library sqlite3.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -20,7 +21,7 @@ from src.schema import (
     Urgency,
 )
 
-DEFAULT_DB_PATH: Final[str] = "data/triage.db"
+DEFAULT_DB_PATH: str = "data/triage.db"
 
 
 def _get_connection(db_path: Path | str | None = None) -> sqlite3.Connection:
@@ -32,7 +33,8 @@ def _get_connection(db_path: Path | str | None = None) -> sqlite3.Connection:
     Returns:
         Configured sqlite3.Connection instance.
     """
-    path_str = str(db_path or DEFAULT_DB_PATH)
+    env_override = os.getenv("TRIAGE_DB_PATH") or os.getenv("CLINIC_DB_PATH")
+    path_str = str(db_path or env_override or DEFAULT_DB_PATH)
     if path_str != ":memory:" and not path_str.startswith("file:"):
         target_path = Path(path_str)
         if target_path.parent and str(target_path.parent) != ".":

@@ -66,6 +66,21 @@ ollama pull llama3.2:3b
    - **Staff queue:** Review pending inbox records filtered by staff role (`On-Call Clinician`, `Pharmacist / MA`, `Front Desk`). Red-flag messages are pinned with red indicators. Edit draft responses directly and click **Approve & Send** or **Reject**.
    - **Dashboard:** Inspect operational volume tiles (total messages, pending count, red flags, average latency) alongside live distribution charts across queues, urgency levels, and review statuses.
 
+## Troubleshooting slow responses
+
+### GPU Power-State & Cold-Start Latency
+On modern laptops with hybrid graphics (e.g., NVIDIA Optimus / AMD switchable graphics), the dedicated GPU frequently enters a low-power deep sleep state when idle. Waking the GPU from sleep and loading model weights into VRAM can introduce a 15–40s delay on the initial cold inference call.
+
+To mitigate this:
+- **Persistent VRAM keep-alive:** The Ollama call in `src/triage.py` is configured with `keep_alive="30m"` (`DEFAULT_KEEP_ALIVE`), ensuring that once loaded, model weights remain resident in GPU VRAM across consecutive messages.
+- **Bounded generation budget:** `num_predict=300` (`DEFAULT_NUM_PREDICT`) bounds the maximum generated token count, preventing runaway inference and keeping generation fast.
+- **Check active model state:** Run `ollama ps` in your terminal to confirm that the model is resident in VRAM rather than running on CPU.
+
+### Fast Demo Mode (Zero GPU / Zero Wait)
+For instant demonstrations, battery-powered testing, or systems where Ollama is not running:
+- Check **Fast demo mode (mock LLM, no model call)** in the sidebar.
+- This bypasses Ollama completely and runs the deterministic keyword-based classifier in `src/mock_llm.py` with near-zero latency, while keeping all rule-based emergency safety checks and staff workflow features intact. A yellow `⚡ MOCK MODE` badge indicates when this mode is active.
+
 ## Evaluation
 
 A synthetic set of 30 to 40 labeled messages is used to compare prompt versions and models.
