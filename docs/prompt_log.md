@@ -336,10 +336,19 @@ Also add a short "How to run" section to README.md. Do not break existing tests.
 ```
 
 **Output / result:** (accuracy, red-flag recall, JSON validity)
-**Problem:**
-**Follow-up prompt:**
-**New result:**
-**What I learned:**
+- Implemented `app.py`, an interactive Streamlit application for the clinic triage agent.
+- Layout configured with persistent prototype disclaimer in the sidebar, model selection (default `llama3.2:3b`), prompt version selection from `src/prompts.py`, and 6 synthetic clinical sample messages (covering emergency, low-supply refill, two-symptom, routine appointment, lab results, and administrative requests).
+- Tab 1 ("Patient intake"): 3-step workflow using `st.session_state` to retain state across reruns. Step 1 accepts messages and branches; Step 2 presents adaptive screening questions (`yes_no` radio or `text`); Step 3 submits via `triage_message` inside `st.spinner`, persists via `save_record`, and displays urgency/route badges, summary, contact cards, draft replies, and emergency red-flag advisories.
+- Tab 2 ("Staff queue"): Role-filtered review queue (`All`, `on_call_clinician`, `pharmacist_or_ma`, `front_desk`) listing pending records with emergency records prioritized and marked with `🚨 [RED FLAG]`. Provides expanders with full context, editable draft responses, and instant Approve/Reject status updates with automatic list refresh.
+- Tab 3 ("Dashboard"): Real-time metric cards (total messages, pending count, red flag incidents, average latency) and bar charts for counts by staff route, clinical urgency, and review status via `get_stats()`.
+- Error handling wraps model calls to display actionable `st.error` messages if Ollama is unreachable. Top-level imports execute with zero LLM calls.
+- Added comprehensive "How to run" section to `README.md`.
+- All 361 unit tests pass.
+
+**Problem:** None. Clean stateful execution across Streamlit reruns and seamless SQLite persistence.
+**Follow-up prompt:** None.
+**New result:** Fully functional clinical workflow UI.
+**What I learned:** Keeping business logic in `src/` modules while utilizing Streamlit solely for presentation ensures testability and clean architecture. Stateful step tracking in `st.session_state` combined with `on_change` callbacks provides robust multi-step wizards without widget state collision.
 
 ---
 

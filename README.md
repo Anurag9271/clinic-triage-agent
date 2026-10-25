@@ -46,10 +46,25 @@ pip install -r requirements.txt
 
 # Install Ollama from https://ollama.com, then pull a model
 ollama pull llama3.2:3b
-
-# Run the app
-streamlit run app.py
 ```
+
+## How to run
+
+1. **Start the local LLM server:**
+   ```bash
+   ollama serve
+   ollama pull llama3.2:3b
+   ```
+
+2. **Launch the Streamlit clinical portal:**
+   ```bash
+   streamlit run app.py
+   ```
+
+3. **Use the interactive tabs:**
+   - **Patient intake:** Type a message or pick from 6 sidebar sample messages (including emergency, low-supply refill, and multi-symptom inquiries). Complete any adaptive follow-up screening questions, then submit to generate structured triage, routing, and draft replies. Red flags immediately show emergency escalation guidance.
+   - **Staff queue:** Review pending inbox records filtered by staff role (`On-Call Clinician`, `Pharmacist / MA`, `Front Desk`). Red-flag messages are pinned with red indicators. Edit draft responses directly and click **Approve & Send** or **Reject**.
+   - **Dashboard:** Inspect operational volume tiles (total messages, pending count, red flags, average latency) alongside live distribution charts across queues, urgency levels, and review statuses.
 
 ## Evaluation
 
