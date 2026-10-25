@@ -144,7 +144,15 @@ Keep code typed and documented.
 **Prompt:**
 
 ```
-(paste exact prompt)
+Implement src/routing.py with a deterministic function route(intent: Intent, urgency: Urgency) -> RouteTo, using enums from src/schema.py. No LLM calls.
+
+Rules, applied in order:
+1. urgency is emergency or urgent -> ON_CALL_CLINICIAN
+2. intent is refill -> PHARMACIST_OR_MA
+3. intent is administrative -> FRONT_DESK
+4. intent is appointment, test_results, general_query, or other: routine -> FRONT_DESK, soon -> ON_CALL_CLINICIAN
+
+Write tests/test_routing.py that checks all 24 intent x urgency combinations using pytest parametrize with an explicit expected table, so every combination is covered.
 ```
 
 **Output / result:**
@@ -159,6 +167,174 @@ Keep code typed and documented.
 **What I learned:**
 
 ---
+
+## Entry template (copy for each new entry)
+
+## Entry XX: Title
+
+**Type:** Build prompt / System prompt
+**Date:**
+**Goal:**
+
+**Prompt:**
+
+Implement the LLM triage step. Use the ollama Python package and Pydantic v2.
+
+1. src/prompts.py: define PROMPT_V1 (a system prompt string) and a PROMPTS dict {"v1": PROMPT_V1}. The prompt tells the model it is a clinic inbox triage assistant that must output only JSON matching the schema, defines each intent and urgency level in one line, tells it to leave unknown contact fields null, to write a one-sentence summary, and to draft a short, polite reply that never gives a diagnosis or medical advice. Keep it simple; it is the baseline we will improve later.
+
+2. src/triage.py:
+   - call_llm(message: str, follow_up: list[FollowUpAnswer], model: str, prompt_version: str = "v1") -> LLMTriageOutput. Use ollama.chat with the system prompt, the patient message plus any follow-up Q&A as the user content, format=LLMTriageOutput.model_json_schema(), options={"temperature": 0}. Validate with LLMTriageOutput.model_validate_json. Retry up to 2 times on validation error.
+   - If all retries fail, return a safe fallback LLMTriageOutput: intent "other", urgency "urgent", summary "Automatic triage failed; manual review required.", and a neutral draft_reply.
+   - triage_message(message, answers=None, model="llama3.2:3b", prompt_version="v1") -> tuple[TriageRecord, float]: run check_red_flags on the message, run evaluate_answers on the answers, and if either is a red flag skip the LLM and build an emergency result (urgency emergency, route ON_CALL_CLINICIAN, draft_reply = EMERGENCY_MESSAGE). Otherwise call call_llm, then route(), then build_triage_result. Return the TriageRecord and the elapsed seconds.
+
+3. tests/test_triage.py: mock ollama.chat with unittest.mock so tests do not need a running model. Cover: valid LLM JSON, invalid JSON then valid on retry, repeated failure gives the fallback, red-flag message skips the LLM entirely (assert the mock was not called), and a red-flag answer skips the LLM.
+
+Keep code typed and documented.
+
+**Output / result:**
+**Problem:**
+**Follow-up prompt:**
+
+```
+(paste exact follow-up)
+```
+
+**New result:**
+**What I learned:**
+
+---
+
+## Entry 03: Triage system prompt v1
+
+**Type:** System prompt (triage LLM)
+**Date:**
+**Goal:** First working classification prompt returning strict JSON.
+
+**Prompt:**
+
+```
+Implement src/intake_questions.py for adaptive intake. It must not call any LLM.
+
+1. Define a Pydantic model Question: id (str), group (str), text (str), answer_type ("yes_no" or "text"), red_flag_if (optional str, e.g. "yes"), reason (optional str, shown when it triggers).
+
+2. Define SYMPTOM_QUESTIONS: dict mapping symptom group -> list[Question], with 2 to 3 questions per group for: sore_throat, cough, fever, headache, abdominal_pain, rash, back_pain, dizziness, injury, medication_refill. Include red-flag yes/no questions where clinically sensible, for example:
+   - sore_throat: fever? difficulty breathing or swallowing, or drooling (red flag)?
+   - cough: shortness of breath (red flag)? coughing up blood (red flag)? how many days?
+   - headache: sudden severe "worst headache of my life" (red flag)? stiff neck or confusion (red flag)?
+   - abdominal_pain: severe constant pain (red flag)? vomiting blood or black stools (red flag)?
+   - back_pain: numbness or weakness in legs, or loss of bladder control (red flag)?
+   - rash: swelling of face, lips, or tongue (red flag)? fever?
+   - medication_refill: how many days of medication are left? any side effects?
+
+3. Define SYMPTOM_PATTERNS: dict group -> list of compiled regexes that detect each group in a message (include common phrasings, e.g. "sore throat", "throat hurts", "coughing", "temperature", "stomach ache", "tummy pain", "lower back pain", "feel dizzy", "need a refill").
+
+4. get_follow_up_questions(message: str, max_questions: int = 3) -> list[Question]: normalize text, detect groups, collect their questions, put red-flag questions first, remove duplicates, cap at max_questions. Return [] if no group matches.
+
+5. evaluate_answers(answers: list[tuple[Question, str]]) -> RedFlag (from src/schema.py): if any answer matches that question's red_flag_if (treat yes, y, yeah, yep, true, "yes i do" as yes; case-insensitive), return is_red_flag=True with a reason naming the question. Otherwise False. Unclear answers must not trigger.
+
+6. to_follow_up_answers(answers) -> list[FollowUpAnswer] converting to the schema model.
+
+7. Write tests/test_intake_questions.py: each group detected by at least 2 phrasings; cap of 3 enforced; red-flag questions ordered first; no match returns []; yes variants trigger; "no" and unclear answers do not; to_follow_up_answers output is valid.
+
+Keep code typed and documented.
+```
+
+**Output / result:** (accuracy, red-flag recall, JSON validity)
+**Problem:**
+**Follow-up prompt:**
+**New result:**
+**What I learned:**
+
+---
+
+
+## Entry 03: Triage system prompt v1
+
+**Type:** System prompt (triage LLM)
+**Date:**
+**Goal:** First working classification prompt returning strict JSON.
+
+**Prompt:**
+
+```
+Implement src/intake_questions.py for adaptive intake. It must not call any LLM.
+
+1. Define a Pydantic model Question: id (str), group (str), text (str), answer_type ("yes_no" or "text"), red_flag_if (optional str, e.g. "yes"), reason (optional str, shown when it triggers).
+
+2. Define SYMPTOM_QUESTIONS: dict mapping symptom group -> list[Question], with 2 to 3 questions per group for: sore_throat, cough, fever, headache, abdominal_pain, rash, back_pain, dizziness, injury, medication_refill. Include red-flag yes/no questions where clinically sensible, for example:
+   - sore_throat: fever? difficulty breathing or swallowing, or drooling (red flag)?
+   - cough: shortness of breath (red flag)? coughing up blood (red flag)? how many days?
+   - headache: sudden severe "worst headache of my life" (red flag)? stiff neck or confusion (red flag)?
+   - abdominal_pain: severe constant pain (red flag)? vomiting blood or black stools (red flag)?
+   - back_pain: numbness or weakness in legs, or loss of bladder control (red flag)?
+   - rash: swelling of face, lips, or tongue (red flag)? fever?
+   - medication_refill: how many days of medication are left? any side effects?
+
+3. Define SYMPTOM_PATTERNS: dict group -> list of compiled regexes that detect each group in a message (include common phrasings, e.g. "sore throat", "throat hurts", "coughing", "temperature", "stomach ache", "tummy pain", "lower back pain", "feel dizzy", "need a refill").
+
+4. get_follow_up_questions(message: str, max_questions: int = 3) -> list[Question]: normalize text, detect groups, collect their questions, put red-flag questions first, remove duplicates, cap at max_questions. Return [] if no group matches.
+
+5. evaluate_answers(answers: list[tuple[Question, str]]) -> RedFlag (from src/schema.py): if any answer matches that question's red_flag_if (treat yes, y, yeah, yep, true, "yes i do" as yes; case-insensitive), return is_red_flag=True with a reason naming the question. Otherwise False. Unclear answers must not trigger.
+
+6. to_follow_up_answers(answers) -> list[FollowUpAnswer] converting to the schema model.
+
+7. Write tests/test_intake_questions.py: each group detected by at least 2 phrasings; cap of 3 enforced; red-flag questions ordered first; no match returns []; yes variants trigger; "no" and unclear answers do not; to_follow_up_answers output is valid.
+
+Keep code typed and documented.
+```
+
+**Output / result:** (accuracy, red-flag recall, JSON validity)
+**Problem:**
+**Follow-up prompt:**
+**New result:**
+**What I learned:**
+
+---
+
+
+## Entry 03: Triage system prompt v1
+
+**Type:** System prompt (triage LLM)
+**Date:**
+**Goal:** First working classification prompt returning strict JSON.
+
+**Prompt:**
+
+```
+Implement src/intake_questions.py for adaptive intake. It must not call any LLM.
+
+1. Define a Pydantic model Question: id (str), group (str), text (str), answer_type ("yes_no" or "text"), red_flag_if (optional str, e.g. "yes"), reason (optional str, shown when it triggers).
+
+2. Define SYMPTOM_QUESTIONS: dict mapping symptom group -> list[Question], with 2 to 3 questions per group for: sore_throat, cough, fever, headache, abdominal_pain, rash, back_pain, dizziness, injury, medication_refill. Include red-flag yes/no questions where clinically sensible, for example:
+   - sore_throat: fever? difficulty breathing or swallowing, or drooling (red flag)?
+   - cough: shortness of breath (red flag)? coughing up blood (red flag)? how many days?
+   - headache: sudden severe "worst headache of my life" (red flag)? stiff neck or confusion (red flag)?
+   - abdominal_pain: severe constant pain (red flag)? vomiting blood or black stools (red flag)?
+   - back_pain: numbness or weakness in legs, or loss of bladder control (red flag)?
+   - rash: swelling of face, lips, or tongue (red flag)? fever?
+   - medication_refill: how many days of medication are left? any side effects?
+
+3. Define SYMPTOM_PATTERNS: dict group -> list of compiled regexes that detect each group in a message (include common phrasings, e.g. "sore throat", "throat hurts", "coughing", "temperature", "stomach ache", "tummy pain", "lower back pain", "feel dizzy", "need a refill").
+
+4. get_follow_up_questions(message: str, max_questions: int = 3) -> list[Question]: normalize text, detect groups, collect their questions, put red-flag questions first, remove duplicates, cap at max_questions. Return [] if no group matches.
+
+5. evaluate_answers(answers: list[tuple[Question, str]]) -> RedFlag (from src/schema.py): if any answer matches that question's red_flag_if (treat yes, y, yeah, yep, true, "yes i do" as yes; case-insensitive), return is_red_flag=True with a reason naming the question. Otherwise False. Unclear answers must not trigger.
+
+6. to_follow_up_answers(answers) -> list[FollowUpAnswer] converting to the schema model.
+
+7. Write tests/test_intake_questions.py: each group detected by at least 2 phrasings; cap of 3 enforced; red-flag questions ordered first; no match returns []; yes variants trigger; "no" and unclear answers do not; to_follow_up_answers output is valid.
+
+Keep code typed and documented.
+```
+
+**Output / result:** (accuracy, red-flag recall, JSON validity)
+**Problem:**
+**Follow-up prompt:**
+**New result:**
+**What I learned:**
+
+---
+
 
 ## Prompt version history (system prompts)
 
