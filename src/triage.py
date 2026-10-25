@@ -39,6 +39,16 @@ from src.schema import (
 logger = logging.getLogger(__name__)
 
 MAX_VALIDATION_RETRIES: Final[int] = 2
+DEFAULT_OLLAMA_TIMEOUT: Final[float] = 120.0
+
+# Configure default Ollama HTTP client timeout to prevent indefinite hangs
+if hasattr(ollama, "_client") and hasattr(ollama._client, "_client"):
+    try:
+        import httpx
+
+        ollama._client._client.timeout = httpx.Timeout(DEFAULT_OLLAMA_TIMEOUT)
+    except Exception:
+        pass
 
 SAFE_FALLBACK_DRAFT_REPLY: Final[str] = (
     "Thank you for contacting our clinic. We have received your message and queued "
@@ -101,13 +111,15 @@ def _format_user_content(message: str, follow_up: list[FollowUpAnswer]) -> str:
     return f"{message}\n\nFollow-up Q&A:\n" + "\n\n".join(qa_lines)
 
 
-def call_llm(
+def call_llm_with_meta(
     message: str,
     follow_up: list[FollowUpAnswer],
     model: str,
     prompt_version: str = "v1",
-) -> LLMTriageOutput:
-    """Call Ollama LLM to classify message and extract structured triage decisions.
+    client: Optional[Any] = None,
+    timeout: float = DEFAULT_OLLAMA_TIMEOUT,
+) -> tuple[LLMTriageOutput, dict[str, Any]]:
+    """Call Ollama LLM to classify message and extract structured triage decisions with metadata.
 
     Sends the versioned system prompt and combined user message/intake answers
     to ollama.chat using temperature 0 and structured JSON schema formatting.
@@ -120,9 +132,14 @@ def call_llm(
         follow_up: List of follow-up intake question-answer pairs.
         model: Ollama model identifier (e.g. 'llama3.2:3b').
         prompt_version: Version key for system prompt template (default: 'v1').
+        client: Optional custom Ollama Client instance with configured timeout.
+        timeout: Request timeout in seconds (default: 120.0).
 
     Returns:
-        Validated LLMTriageOutput model instance.
+        A tuple of (LLMTriageOutput, meta_dict) where meta_dict contains:
+            - attempts (int): Total number of attempts executed (1 to 3).
+            - used_fallback (bool): True if all retries failed and safe fallback was used.
+            - latency_s (float): Total elapsed time in seconds for the call.
 
     Raises:
         ValueError: If prompt_version is not recognized in PROMPTS.
@@ -132,13 +149,16 @@ def call_llm(
             f"Prompt version '{prompt_version}' not recognized. Available: {list(PROMPTS.keys())}"
         )
 
+    start_time = time.perf_counter()
     system_prompt = PROMPTS[prompt_version]
     user_content = _format_user_content(message, follow_up)
+    chat_func = getattr(client, "chat", ollama.chat) if client is not None else ollama.chat
 
     max_retries = MAX_VALIDATION_RETRIES
     for attempt in range(max_retries + 1):
+        attempts_count = attempt + 1
         try:
-            response = ollama.chat(
+            response = chat_func(
                 model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -148,7 +168,14 @@ def call_llm(
                 options={"temperature": 0},
             )
             raw_content = _extract_response_content(response)
-            return LLMTriageOutput.model_validate_json(raw_content)
+            output = LLMTriageOutput.model_validate_json(raw_content)
+            latency_s = time.perf_counter() - start_time
+            meta = {
+                "attempts": attempts_count,
+                "used_fallback": False,
+                "latency_s": latency_s,
+            }
+            return output, meta
         except (ValidationError, Exception) as err:
             logger.warning(
                 "LLM triage validation failed on attempt %d of %d: %s",
@@ -161,7 +188,7 @@ def call_llm(
                     "All %d LLM triage attempts failed. Returning safe fallback triage output.",
                     max_retries + 1,
                 )
-                return LLMTriageOutput(
+                fallback_output = LLMTriageOutput(
                     intent=Intent.OTHER,
                     urgency=Urgency.URGENT,
                     suggested_specialty=None,
@@ -169,43 +196,81 @@ def call_llm(
                     summary="Automatic triage failed; manual review required.",
                     draft_reply=SAFE_FALLBACK_DRAFT_REPLY,
                 )
+                latency_s = time.perf_counter() - start_time
+                meta = {
+                    "attempts": max_retries + 1,
+                    "used_fallback": True,
+                    "latency_s": latency_s,
+                }
+                return fallback_output, meta
 
     # Defensive return for static analyzers
-    return LLMTriageOutput(
-        intent=Intent.OTHER,
-        urgency=Urgency.URGENT,
-        suggested_specialty=None,
-        contact=Contact(),
-        summary="Automatic triage failed; manual review required.",
-        draft_reply=SAFE_FALLBACK_DRAFT_REPLY,
+    latency_s = time.perf_counter() - start_time
+    return (
+        LLMTriageOutput(
+            intent=Intent.OTHER,
+            urgency=Urgency.URGENT,
+            suggested_specialty=None,
+            contact=Contact(),
+            summary="Automatic triage failed; manual review required.",
+            draft_reply=SAFE_FALLBACK_DRAFT_REPLY,
+        ),
+        {"attempts": max_retries + 1, "used_fallback": True, "latency_s": latency_s},
     )
 
 
-def triage_message(
+def call_llm(
+    message: str,
+    follow_up: list[FollowUpAnswer],
+    model: str,
+    prompt_version: str = "v1",
+) -> LLMTriageOutput:
+    """Call Ollama LLM to classify message and extract structured triage decisions.
+
+    Delegates to call_llm_with_meta and returns the validated LLMTriageOutput.
+
+    Args:
+        message: Raw patient message text.
+        follow_up: List of follow-up intake question-answer pairs.
+        model: Ollama model identifier (e.g. 'llama3.2:3b').
+        prompt_version: Version key for system prompt template (default: 'v1').
+
+    Returns:
+        Validated LLMTriageOutput model instance.
+    """
+    output, _ = call_llm_with_meta(
+        message=message,
+        follow_up=follow_up,
+        model=model,
+        prompt_version=prompt_version,
+    )
+    return output
+
+
+def triage_message_with_meta(
     message: str,
     answers: Optional[list[tuple[Question, str]] | list[FollowUpAnswer]] = None,
     model: str = "llama3.2:3b",
     prompt_version: str = "v1",
-) -> tuple[TriageRecord, float]:
-    """Execute end-to-end clinical triage for an incoming patient message.
+    client: Optional[Any] = None,
+    timeout: float = DEFAULT_OLLAMA_TIMEOUT,
+) -> tuple[TriageRecord, float, dict[str, Any]]:
+    """Execute end-to-end clinical triage returning the record, elapsed time, and execution metadata.
 
     Performs deterministic red-flag screening on the raw message and intake
     answers. If any red flag triggers, bypasses LLM inference entirely and
-    immediately constructs an emergency triage record routed to the on-call
-    clinician with standard emergency guidance.
-
-    If no red flags are found, invokes the LLM triage extraction, applies
-    staff routing rules, and creates a consolidated TriageRecord.
+    immediately constructs an emergency triage record. Otherwise invokes the LLM.
 
     Args:
         message: Raw incoming patient message text.
-        answers: Optional intake questions and answers, either as (Question, str)
-            tuples or validated FollowUpAnswer models.
+        answers: Optional intake questions and answers.
         model: Ollama model identifier to use for LLM classification.
         prompt_version: Version identifier for system prompt template.
+        client: Optional custom Ollama Client instance.
+        timeout: Request timeout in seconds.
 
     Returns:
-        A tuple of (TriageRecord, elapsed_seconds: float).
+        A tuple of (TriageRecord, elapsed_seconds: float, meta: dict).
     """
     start_time = time.perf_counter()
 
@@ -252,15 +317,22 @@ def triage_message(
             original_message=message,
             result=emergency_result,
         )
-        return record, elapsed
+        meta = {
+            "attempts": 0,
+            "used_fallback": False,
+            "latency_s": elapsed,
+        }
+        return record, elapsed, meta
 
     # 4. Standard path: Call LLM, route, and build consolidated triage result
     active_red_flag = RedFlag(is_red_flag=False, reason=None)
-    llm_output = call_llm(
+    llm_output, meta = call_llm_with_meta(
         message=message,
         follow_up=follow_up_list,
         model=model,
         prompt_version=prompt_version,
+        client=client,
+        timeout=timeout,
     )
     routed_to = route(intent=llm_output.intent, urgency=llm_output.urgency)
     triage_result = build_triage_result(
@@ -275,12 +347,56 @@ def triage_message(
         original_message=message,
         result=triage_result,
     )
+    return record, elapsed, meta
+
+
+def triage_message(
+    message: str,
+    answers: Optional[list[tuple[Question, str]] | list[FollowUpAnswer]] = None,
+    model: str = "llama3.2:3b",
+    prompt_version: str = "v1",
+    client: Optional[Any] = None,
+    timeout: float = DEFAULT_OLLAMA_TIMEOUT,
+) -> tuple[TriageRecord, float]:
+    """Execute end-to-end clinical triage for an incoming patient message.
+
+    Performs deterministic red-flag screening on the raw message and intake
+    answers. If any red flag triggers, bypasses LLM inference entirely and
+    immediately constructs an emergency triage record routed to the on-call
+    clinician with standard emergency guidance.
+
+    If no red flags are found, invokes the LLM triage extraction, applies
+    staff routing rules, and creates a consolidated TriageRecord.
+
+    Args:
+        message: Raw incoming patient message text.
+        answers: Optional intake questions and answers, either as (Question, str)
+            tuples or validated FollowUpAnswer models.
+        model: Ollama model identifier to use for LLM classification.
+        prompt_version: Version identifier for system prompt template.
+        client: Optional custom Ollama Client instance.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        A tuple of (TriageRecord, elapsed_seconds: float).
+    """
+    record, elapsed, _ = triage_message_with_meta(
+        message=message,
+        answers=answers,
+        model=model,
+        prompt_version=prompt_version,
+        client=client,
+        timeout=timeout,
+    )
     return record, elapsed
 
 
 __all__ = [
+    "DEFAULT_OLLAMA_TIMEOUT",
     "MAX_VALIDATION_RETRIES",
     "SAFE_FALLBACK_DRAFT_REPLY",
     "call_llm",
+    "call_llm_with_meta",
     "triage_message",
+    "triage_message_with_meta",
 ]
