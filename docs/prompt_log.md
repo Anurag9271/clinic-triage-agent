@@ -99,7 +99,30 @@ Add each of these phrasings as must-trigger test cases in tests/test_red_flags.p
 **Prompt:**
 
 ```
-(paste here)
+Implement src/intake_questions.py for adaptive intake. It must not call any LLM.
+
+1. Define a Pydantic model Question: id (str), group (str), text (str), answer_type ("yes_no" or "text"), red_flag_if (optional str, e.g. "yes"), reason (optional str, shown when it triggers).
+
+2. Define SYMPTOM_QUESTIONS: dict mapping symptom group -> list[Question], with 2 to 3 questions per group for: sore_throat, cough, fever, headache, abdominal_pain, rash, back_pain, dizziness, injury, medication_refill. Include red-flag yes/no questions where clinically sensible, for example:
+   - sore_throat: fever? difficulty breathing or swallowing, or drooling (red flag)?
+   - cough: shortness of breath (red flag)? coughing up blood (red flag)? how many days?
+   - headache: sudden severe "worst headache of my life" (red flag)? stiff neck or confusion (red flag)?
+   - abdominal_pain: severe constant pain (red flag)? vomiting blood or black stools (red flag)?
+   - back_pain: numbness or weakness in legs, or loss of bladder control (red flag)?
+   - rash: swelling of face, lips, or tongue (red flag)? fever?
+   - medication_refill: how many days of medication are left? any side effects?
+
+3. Define SYMPTOM_PATTERNS: dict group -> list of compiled regexes that detect each group in a message (include common phrasings, e.g. "sore throat", "throat hurts", "coughing", "temperature", "stomach ache", "tummy pain", "lower back pain", "feel dizzy", "need a refill").
+
+4. get_follow_up_questions(message: str, max_questions: int = 3) -> list[Question]: normalize text, detect groups, collect their questions, put red-flag questions first, remove duplicates, cap at max_questions. Return [] if no group matches.
+
+5. evaluate_answers(answers: list[tuple[Question, str]]) -> RedFlag (from src/schema.py): if any answer matches that question's red_flag_if (treat yes, y, yeah, yep, true, "yes i do" as yes; case-insensitive), return is_red_flag=True with a reason naming the question. Otherwise False. Unclear answers must not trigger.
+
+6. to_follow_up_answers(answers) -> list[FollowUpAnswer] converting to the schema model.
+
+7. Write tests/test_intake_questions.py: each group detected by at least 2 phrasings; cap of 3 enforced; red-flag questions ordered first; no match returns []; yes variants trigger; "no" and unclear answers do not; to_follow_up_answers output is valid.
+
+Keep code typed and documented.
 ```
 
 **Output / result:** (accuracy, red-flag recall, JSON validity)
