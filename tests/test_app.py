@@ -267,3 +267,19 @@ def test_patched_llm_exception_shows_friendly_error():
             "Triage Failed" in err or "Connection to local Ollama server refused" in err
             for err in error_texts
         )
+
+
+def test_sample_message_selector_populates_text_area():
+    """Selecting a sample message populates the text area widget directly."""
+    at = AppTest.from_file(APP_PATH, default_timeout=30)
+    at.run()
+    assert not at.exception
+    assert at.text_area(key="msg_text_area").value == ""
+
+    # Select the first sample message
+    sample_key = list(SAMPLE_MESSAGES.keys())[0]
+    expected_text = SAMPLE_MESSAGES[sample_key]
+    at.sidebar.selectbox(key="sample_selector").select(sample_key).run()
+
+    assert not at.exception
+    assert at.text_area(key="msg_text_area").value == expected_text

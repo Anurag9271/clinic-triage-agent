@@ -200,6 +200,8 @@ def _init_app_session_state() -> None:
         st.session_state.step = 1
     if "message_input" not in st.session_state:
         st.session_state.message_input = ""
+    if "msg_text_area" not in st.session_state:
+        st.session_state.msg_text_area = ""
     if "follow_up_qs" not in st.session_state:
         st.session_state.follow_up_qs = []
     if "triage_record" not in st.session_state:
@@ -277,7 +279,16 @@ def _on_sample_selection_change() -> None:
     """Callback when a sample message is selected from the sidebar."""
     selected_sample = st.session_state.sample_selector
     if selected_sample and selected_sample != "-- Custom / Blank --":
-        st.session_state.message_input = SAMPLE_MESSAGES[selected_sample]
+        sample_text = SAMPLE_MESSAGES[selected_sample]
+        st.session_state.message_input = sample_text
+        st.session_state.msg_text_area = sample_text
+        st.session_state.step = 1
+        st.session_state.follow_up_qs = []
+        st.session_state.triage_record = None
+        st.session_state.triage_error = None
+    elif selected_sample == "-- Custom / Blank --":
+        st.session_state.message_input = ""
+        st.session_state.msg_text_area = ""
         st.session_state.step = 1
         st.session_state.follow_up_qs = []
         st.session_state.triage_record = None
@@ -421,7 +432,6 @@ with tab_intake:
         st.subheader("Step 1: Enter Patient Message")
         message_input = st.text_area(
             "Incoming Patient Message",
-            value=st.session_state.message_input,
             key="msg_text_area",
             height=140,
             placeholder="Type patient inquiry or select a sample message from the sidebar...",
@@ -502,6 +512,9 @@ with tab_intake:
             st.error("No triage result found in session. Please start a new message.")
             if st.button("Start New Message", key="btn_start_new_empty"):
                 st.session_state.step = 1
+                st.session_state.message_input = ""
+                st.session_state.msg_text_area = ""
+                st.session_state.sample_selector = "-- Custom / Blank --"
                 st.rerun()
         else:
             result = record.result
@@ -596,6 +609,8 @@ with tab_intake:
             if st.button("Start new message", key="btn_new_message", type="primary"):
                 st.session_state.step = 1
                 st.session_state.message_input = ""
+                st.session_state.msg_text_area = ""
+                st.session_state.sample_selector = "-- Custom / Blank --"
                 st.session_state.follow_up_qs = []
                 st.session_state.triage_record = None
                 st.session_state.triage_latency = 0.0
