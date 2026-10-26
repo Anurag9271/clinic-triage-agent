@@ -43,6 +43,8 @@ CARDIAC_MESSAGES = [
     "Experiencing a squeezing or crushing chest feeling right now.",
     "My chest feels tight and it is getting worse.",
     "Sharp shooting pain in my left arm or jaw.",
+    "I fell heavy heart pain",
+    "I feel heavy heart pain",
 ]
 
 RESPIRATORY_MESSAGES = [
