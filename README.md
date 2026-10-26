@@ -1,137 +1,266 @@
 # Clinic Inbox Triage Agent
 
-An AI-assisted triage pipeline for clinic patient messages. It asks adaptive follow-up questions, flags emergencies with rule-based checks, classifies each message with a local open-source LLM, routes it to the right staff queue, drafts a reply for human approval, and logs everything.
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Streamlit](https://img.shields.io/badge/frontend-Streamlit-red.svg)](https://streamlit.io/)
+[![Ollama](https://img.shields.io/badge/runtime-Ollama-black.svg)](https://ollama.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-> **Disclaimer:** This is a prototype built for an assessment. It is not a medical device and does not provide medical advice. All data in this repository is synthetic.
+An AI-assisted, privacy-first clinical inbox triage agent for primary care clinics. It provides adaptive symptom screening, deterministic emergency red-flag escalation, local LLM classification and response drafting, contact anti-hallucination grounding, and human-in-the-loop staff review.
 
-## Why this project
+> **Disclaimer:** This software is a functional prototype built for demonstration and evaluation. It is **not** a certified medical device and does **not** provide clinical diagnosis or medical advice. All data in this repository is synthetic.
 
-Clinic front desks spend a large part of the day sorting messages: appointments, refills, test results, paperwork. Urgent messages can get buried. This project speeds up triage while keeping a human in control, and it runs fully on local models so patient data never leaves the machine.
+---
 
-## Workflow
+## Key Features
 
-1. **Message in:** patient fills an intake form (Streamlit).
-2. **Adaptive follow-up:** a fixed symptom-to-questions table asks the mandatory questions; the LLM adds up to 2 context-specific ones.
-3. **Red-flag check (rule-based):** emergency keywords bypass the AI and trigger immediate escalation.
-4. **LLM extraction:** structured JSON (intent, urgency, specialty, contact) validated with Pydantic.
-5. **Routing:** deterministic mapping from intent and urgency to a staff queue.
-6. **Reply drafting:** the model drafts a reply.
-7. **Staff approval:** staff edit, approve, or reject.
-8. **Logging:** all steps stored in SQLite and shown in a dashboard.
+1. **Deterministic Safety-First Red-Flag Screening:**
+   - Scans incoming patient messages across 7 critical emergency categories (cardiac, respiratory, neurological, severe hemorrhage, anaphylaxis, overdose/poisoning, mental health crisis).
+   - Life-threatening symptoms immediately trigger emergency advisory guidance, bypass the LLM entirely, and escalate directly to the On-Call Clinician.
+2. **Adaptive Intake (Two-Way Triage):**
+   - Automatically detects relevant symptoms (e.g. sore throat, cough, fever) and prompts the patient with structured screening questions before submission.
+   - Positive answers to safety-critical follow-ups immediately trigger emergency escalation.
+3. **Explicit Contact Capture & Hallucination Grounding:**
+   - Captures optional contact details (Name, Phone, Email, Preferred Method) via form inputs with real-time validation.
+   - Anti-hallucination engine verifies any LLM-extracted contact details against the raw message text.
+   - Field-by-field merge precedence: **Form Input > Regex Extraction > Grounded LLM**. Warns staff if no contact method is available for dispatch.
+4. **Structured Classification & Routing:**
+   - Extracts intent (`appointment`, `refill`, `test_results`, `administrative`, `general_query`, `other`), urgency (`routine`, `soon`, `urgent`, `emergency`), and suggested specialty.
+   - Deterministic rule-based routing to specific clinical queues: **On-Call Clinician**, **Pharmacist / MA**, or **Front Desk**.
+5. **Human-in-the-Loop Staff Review Queue:**
+   - Clinical staff can filter by role, inspect patient messages, review clinical summaries, edit preliminary draft responses, and approve or reject tickets.
+6. **Operational Metrics Dashboard:**
+   - Live aggregate volume tiles, urgency distributions, queue breakdowns, and review statuses backed by local SQLite persistence.
+7. **Fast Demo Mode (Zero-GPU / Instant Testing):**
+   - Toggle fast demo mode in the sidebar to test the entire clinical workflow using a deterministic keyword-based mock classifier with near-zero latency, without requiring Ollama or a GPU.
 
-## Routing rules
+---
 
-| Category | Routes to |
-|---|---|
-| Emergency or urgent clinical | On-call nurse or doctor |
-| Prescription refill | Pharmacist or medical assistant |
-| Administrative (sick notes, paperwork, billing) | Front desk |
-| Appointment, test results, general query | Front desk; nurse if urgency is soon or higher |
+## Routing Architecture
 
-## Tech stack
+| Category / Urgency | Target Queue | Responsible Staff |
+|---|---|---|
+| **Emergency or Urgent Clinical** | `on_call_clinician` | On-Call Physician or Nurse Practitioner |
+| **Prescription Refills** | `pharmacist_or_ma` | Clinical Pharmacist or Medical Assistant |
+| **Administrative** (sick notes, records, billing) | `front_desk` | Reception & Practice Administration |
+| **Appointments & Test Results (Routine)** | `front_desk` | Front Desk Staff |
+| **Appointments & Test Results (Soon / Urgent)** | `on_call_clinician` | Triage Nurse |
 
-- Python, Pydantic, Streamlit, SQLite
-- Ollama with local models: Llama 3.2 3B, Gemma 3 4B, Llama 3.1 8B or Qwen2.5 7B
-- scikit-learn (TF-IDF + logistic regression baseline)
-- Built with Antigravity IDE; prompts documented in [docs/prompt_log.md](docs/prompt_log.md)
+---
 
-## Setup
+## Prerequisites
+
+Before running the application, make sure you have:
+- **Python 3.10+** (tested on Python 3.11, 3.12, and 3.14).
+- **Git** installed on your system.
+- *(Optional for Full LLM Mode)* **[Ollama](https://ollama.com)** installed and running. If you do not have Ollama, you can run the app in **Fast Demo Mode** right out of the box!
+
+---
+
+## Step-by-Step Installation & Setup
+
+### 1. Clone the Repository
+
+Open your terminal or command prompt and clone the repository:
 
 ```bash
 git clone https://github.com/Anurag9271/clinic-triage-agent.git
 cd clinic-triage-agent
-python -m venv .venv
-.venv\Scripts\activate        # Windows
-pip install -r requirements.txt
-
-# Install Ollama from https://ollama.com, then pull a model
-ollama pull llama3.2:3b
 ```
 
-## How to run
+### 2. Create and Activate a Virtual Environment
 
-1. **Start the local LLM server:**
+- **On Windows (PowerShell):**
+  ```powershell
+  python -m venv .venv
+  .venv\Scripts\Activate.ps1
+  ```
+  *(If execution policy blocks scripts, run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` first).*
+
+- **On Windows (Command Prompt `cmd`):**
+  ```cmd
+  python -m venv .venv
+  .venv\Scripts\activate.bat
+  ```
+
+- **On macOS / Linux:**
+  ```bash
+  python3 -m venv .venv
+  source .venv/bin/activate
+  ```
+
+### 3. Install Python Dependencies
+
+Upgrade `pip` and install the required packages:
+
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+---
+
+## How to Run the Application
+
+You can run the triage portal in two different modes:
+
+### Option A: Local LLM Mode (Recommended for AI testing)
+
+1. **Start the Ollama server** in a terminal window (if not already running as a background service):
    ```bash
    ollama serve
-   ollama pull llama3.2:3b
    ```
 
-2. **Launch the Streamlit clinical portal:**
+2. **Pull the default local model** (Llama 3.2 3B):
+   ```bash
+   ollama pull llama3.2:3b
+   ```
+   *(Optional supported models: `llama3.2:1b`, `llama3.1:8b`, `gemma2:2b`, `mistral:7b`)*.
+
+3. **Launch the Streamlit web portal:**
    ```bash
    streamlit run app.py
    ```
+   The portal will open automatically in your browser at `http://localhost:8501`.
 
-3. **Use the interactive tabs:**
-   - **Patient intake:** Type a message or pick from 6 sidebar sample messages (including emergency, low-supply refill, and multi-symptom inquiries). Complete any adaptive follow-up screening questions, then submit to generate structured triage, routing, and draft replies. Red flags immediately show emergency escalation guidance.
-   - **Staff queue:** Review pending inbox records filtered by staff role (`On-Call Clinician`, `Pharmacist / MA`, `Front Desk`). Red-flag messages are pinned with red indicators. Edit draft responses directly and click **Approve & Send** or **Reject**.
-   - **Dashboard:** Inspect operational volume tiles (total messages, pending count, red flags, average latency) alongside live distribution charts across queues, urgency levels, and review statuses.
+---
 
-## Troubleshooting slow responses
+### Option B: Fast Demo Mode (Zero-GPU, No Ollama Required)
 
-### GPU Power-State & Cold-Start Latency
-On modern laptops with hybrid graphics (e.g., NVIDIA Optimus / AMD switchable graphics), the dedicated GPU frequently enters a low-power deep sleep state when idle. Waking the GPU from sleep and loading model weights into VRAM can introduce a 15–40s delay on the initial cold inference call.
+If you do not have Ollama installed or are on a battery-powered / CPU-only machine:
 
-To mitigate this:
-- **Persistent VRAM keep-alive:** The Ollama call in `src/triage.py` is configured with `keep_alive="30m"` (`DEFAULT_KEEP_ALIVE`), ensuring that once loaded, model weights remain resident in GPU VRAM across consecutive messages.
-- **Bounded generation budget:** `num_predict=300` (`DEFAULT_NUM_PREDICT`) bounds the maximum generated token count, preventing runaway inference and keeping generation fast.
-- **Check active model state:** Run `ollama ps` in your terminal to confirm that the model is resident in VRAM rather than running on CPU.
+1. **Launch Streamlit directly:**
+   ```bash
+   streamlit run app.py
+   ```
+2. In the left sidebar under **⚙️ Triage Settings**, check:
+   `☑ Fast demo mode (mock LLM, no model call)`
+3. A yellow `⚡ MOCK MODE` badge will appear. All rule-based red-flag checks, adaptive screening questions, contact extraction, database logging, and staff queues run with sub-millisecond execution!
 
-### Fast Demo Mode (Zero GPU / Zero Wait)
-For instant demonstrations, battery-powered testing, or systems where Ollama is not running:
-- Check **Fast demo mode (mock LLM, no model call)** in the sidebar.
-- This bypasses Ollama completely and runs the deterministic keyword-based classifier in `src/mock_llm.py` with near-zero latency, while keeping all rule-based emergency safety checks and staff workflow features intact. A yellow `⚡ MOCK MODE` badge indicates when this mode is active.
+---
 
-## Evaluation
+## Using the Portal
 
-A synthetic set of 30 to 40 labeled messages is used to compare prompt versions and models.
+The application features three integrated clinical workflow tabs:
 
-| Model / method | Intent acc. | Urgency acc. | Red-flag recall | Latency (s) |
-|---|---|---|---|---|
-| TF-IDF + LogReg | | | | |
-| Llama 3.2 3B | | | | |
-| Gemma 3 4B | | | | |
-| Llama 3.1 8B / Qwen2.5 7B | | | | |
+1. **📝 Patient Intake:**
+   - **Step 1:** Enter a patient message or pick one of 6 representative clinical scenarios from the sidebar (e.g. cardiac emergency, refill request, multi-symptom fever). Optionally enter patient name, phone, email, and preferred contact channel.
+   - **Step 2:** If acute symptoms are detected (e.g. sore throat, cough), complete the adaptive follow-up screening questions.
+   - **Step 3:** View the consolidated triage decision: urgency badge, queue assignment, clinical summary, verified contact card, and draft reply. Red flags immediately show emergency escalation guidance.
+2. **📥 Staff Queue:**
+   - Filter inbox items by discipline (`On-Call Clinician`, `Pharmacist / MA`, `Front Desk`).
+   - Emergency tickets are pinned with bold `🚨 [RED FLAG]` headers.
+   - Review patient context, edit preliminary replies directly in the text area, and click **Approve & Send** or **Reject**.
+   - If the patient provided no phone or email, an alert informs staff that no contact method is available for outbound dispatch.
+3. **📊 Dashboard:**
+   - Real-time clinical operations metrics: total message volume, pending queue counts, red-flag emergency frequency, and median latency.
+   - Live distribution charts tracking triage categories, urgency tiers, and review statuses stored in local SQLite.
 
-Run the evaluation:
+---
+
+## Running the Automated Test Suite
+
+The project includes an end-to-end test suite containing **402 automated tests** covering models, schema validators, red-flag patterns, adaptive questions, contact regex/grounding, database operations, and headless Streamlit UI interactions (`streamlit.testing.v1.AppTest`).
+
+Run the test suite:
 
 ```bash
-python eval/run_eval.py
+pytest
 ```
 
-## Project structure
+To run with verbose output or on a specific test module:
+
+```bash
+# Run contact extraction & validation tests
+pytest tests/test_contact.py -v
+
+# Run headless Streamlit app UI tests
+pytest tests/test_app.py -v
+
+# Run rule-based emergency safety tests
+pytest tests/test_red_flags.py -v
+```
+
+---
+
+## Running the Evaluation Benchmark
+
+To benchmark inference accuracy, red-flag recall, and latency across local models and prompt versions against the labeled synthetic dataset (`data/synthetic_messages.csv`):
+
+```bash
+# Run LLM evaluation harness
+python eval/run_eval.py
+
+# Run classical baseline (TF-IDF + Logistic Regression)
+python eval/baseline.py
+```
+
+Evaluation metrics are saved directly to `results/summary.csv` and detailed prediction CSVs.
+
+---
+
+## Performance & Latency Tips
+
+- **GPU Sleep State Latency:** On laptops with switchable graphics (NVIDIA Optimus / AMD), waking the GPU from sleep can add 15–30 seconds on the very first inference call.
+- **Persistent Keep-Alive:** The Ollama client in [`src/triage.py`](src/triage.py) uses `keep_alive="30m"` (`DEFAULT_KEEP_ALIVE`), keeping model weights resident in GPU VRAM across consecutive messages.
+- **Token Budgeting:** Inference calls specify `num_predict=300` (`DEFAULT_NUM_PREDICT`) to bound generation latency and prevent runaway responses.
+- **Verify Active Model:** Run `ollama ps` in your terminal to verify that the model is loaded in VRAM (`100% GPU`).
+
+---
+
+## Project Structure
 
 ```
 clinic-triage-agent/
-├── README.md
+├── README.md                          # Project documentation and setup guide
+├── requirements.txt                   # Pinned Python package dependencies
+├── app.py                             # Streamlit interactive triage application
 ├── docs/
-│   ├── project_brief.md
-│   └── prompt_log.md
+│   └── Clinic_Project_Brief.md        # Clinical specification and project brief
 ├── src/
-│   ├── schema.py
-│   ├── red_flags.py
-│   ├── triage.py
-│   ├── routing.py
-│   ├── intake_questions.py
-│   └── db.py
-├── data/synthetic_messages.csv
-├── eval/run_eval.py
-├── app.py
-├── requirements.txt
-└── .gitignore
+│   ├── __init__.py                    # Package exports
+│   ├── schema.py                      # Pydantic v2 domain schemas (TriageResult, Contact, etc.)
+│   ├── red_flags.py                   # Rule-based emergency red-flag pattern matcher
+│   ├── contact.py                     # Regex extraction, grounding, and contact merge logic
+│   ├── triage.py                      # Core triage orchestration & Ollama interface
+│   ├── intake_questions.py            # Adaptive screening question bank and answer evaluation
+│   ├── routing.py                     # Deterministic queue assignment rules
+│   ├── prompts.py                     # Versioned clinical system prompts (v1, etc.)
+│   ├── mock_llm.py                    # Deterministic keyword mock LLM for fast demo mode
+│   └── db.py                          # SQLite persistence layer and query functions
+├── tests/
+│   ├── test_app.py                    # Headless Streamlit AppTest integration tests
+│   ├── test_contact.py                # Regex extraction, validation, and grounding unit tests
+│   ├── test_red_flags.py              # Positive & negative emergency safety trigger tests
+│   ├── test_triage.py                 # End-to-end triage pipeline and fallback tests
+│   ├── test_schema.py                 # Pydantic model validation tests
+│   ├── test_routing.py                # Queue routing rule tests
+│   ├── test_intake_questions.py       # Adaptive intake questions & answer evaluation tests
+│   ├── test_db.py                     # SQLite CRUD, stats, and concurrency tests
+│   ├── test_mock_llm.py               # Mock LLM classifier tests
+│   ├── test_dataset.py                # Synthetic message dataset integrity tests
+│   └── test_eval_metrics.py           # Evaluation calculation tests
+├── data/
+│   └── synthetic_messages.csv         # 40 labeled synthetic clinical benchmark messages
+└── eval/
+    ├── run_eval.py                    # Multi-model evaluation benchmark harness
+    ├── baseline.py                    # TF-IDF + Logistic Regression classical baseline
+    └── metrics.py                     # Evaluation scoring & metrics calculation
 ```
 
-## Safety and ethics
+---
 
-- Synthetic data only.
-- Rule-based emergency escalation runs before any LLM call.
-- Safety-critical follow-up questions come from a fixed table, not the model.
-- A human approves every reply before it is sent.
-- Contact details come from form fields first, and LLM-extracted contact data is verified against the message text.
+## Safety and Ethics
 
-## Demo
+- **Synthetic Data Only:** All patient messages, contact details, and clinical data used in this project are entirely synthetic.
+- **Deterministic Escalation:** Safety-critical red flags run prior to any LLM inference, ensuring emergencies never depend on model availability or behavior.
+- **Grounding Safety:** Contact details come from validated form inputs first; any LLM-extracted contact data is verified against the raw message text to eliminate hallucinated phone numbers or names.
+- **Human in the Loop:** No drafted reply is ever dispatched without explicit review and approval by authorized clinical or administrative staff.
+- **Local & Private:** Zero external API calls. Patient health inquiries remain strictly on the local device.
 
-Video walkthrough: (add link)
+---
 
 ## Author
 
-Anurag
+**Anurag**
+- GitHub: [@Anurag9271](https://github.com/Anurag9271)
+- Repository: [clinic-triage-agent](https://github.com/Anurag9271/clinic-triage-agent)
