@@ -14,6 +14,7 @@ from typing import Final, Optional
 import pandas as pd
 import streamlit as st
 
+from src.contact import has_contact_method, validate_contact_input
 from src.db import (
     get_stats,
     init_db,
@@ -29,7 +30,7 @@ from src.intake_questions import (
 )
 from src.prompts import PROMPTS
 from src.red_flags import EMERGENCY_MESSAGE
-from src.schema import Intent, RecordStatus, RouteTo, TriageRecord, Urgency
+from src.schema import Contact, Intent, RecordStatus, RouteTo, TriageRecord, Urgency
 from src.triage import triage_message
 
 logger = logging.getLogger(__name__)
@@ -210,6 +211,16 @@ def _init_app_session_state() -> None:
         st.session_state.triage_latency = 0.0
     if "triage_error" not in st.session_state:
         st.session_state.triage_error = None
+    if "form_contact" not in st.session_state:
+        st.session_state.form_contact = None
+    if "input_contact_name" not in st.session_state:
+        st.session_state.input_contact_name = ""
+    if "input_contact_phone" not in st.session_state:
+        st.session_state.input_contact_phone = ""
+    if "input_contact_email" not in st.session_state:
+        st.session_state.input_contact_email = ""
+    if "select_contact_pref" not in st.session_state:
+        st.session_state.select_contact_pref = "no preference"
 
 
 # Ensure database and table structures are initialized on startup
@@ -359,6 +370,7 @@ def _render_route_badge(route_to: RouteTo | str) -> str:
 def _execute_triage(
     message: str,
     answers: Optional[list[tuple[Question, str]]] = None,
+    contact: Optional[Contact] = None,
 ) -> None:
     """Run triage pipeline, save record, and store result in session state."""
     status_label = (
@@ -371,6 +383,7 @@ def _execute_triage(
             record, latency_s = triage_message(
                 message=message,
                 answers=answers,
+                contact=contact,
                 model=selected_model,
                 prompt_version=selected_prompt_version,
                 use_mock=fast_demo_mode,
@@ -438,13 +451,56 @@ with tab_intake:
             help="Raw communication received from the patient portal or messaging channel.",
         )
 
+        st.markdown("##### 👤 Patient Contact Details (Optional)")
+        col_c1, col_c2, col_c3 = st.columns(3)
+        with col_c1:
+            contact_name = st.text_input(
+                "Patient Name",
+                key="input_contact_name",
+                placeholder="e.g. Jane Doe",
+            )
+        with col_c2:
+            contact_phone = st.text_input(
+                "Phone Number",
+                key="input_contact_phone",
+                placeholder="e.g. 555-0144",
+            )
+        with col_c3:
+            contact_email = st.text_input(
+                "Email Address",
+                key="input_contact_email",
+                placeholder="e.g. jane@example.com",
+            )
+
+        contact_pref = st.selectbox(
+            "Preferred Contact Method",
+            options=["no preference", "phone", "email"],
+            format_func=lambda x: x.title(),
+            key="select_contact_pref",
+        )
+
         col_next, _ = st.columns([1, 4])
         with col_next:
             if st.button("Next ➔", key="btn_next", type="primary", use_container_width=True):
                 cleaned_msg = message_input.strip()
-                if not cleaned_msg:
+                contact_errors = validate_contact_input(
+                    name=contact_name,
+                    phone=contact_phone,
+                    email=contact_email,
+                )
+                if contact_errors:
+                    for err in contact_errors:
+                        st.error(err)
+                elif not cleaned_msg:
                     st.warning("Please enter a patient message to proceed.")
                 else:
+                    form_contact = Contact(
+                        name=contact_name.strip() if contact_name.strip() else None,
+                        phone=contact_phone.strip() if contact_phone.strip() else None,
+                        email=contact_email.strip() if contact_email.strip() else None,
+                        preferred_method=contact_pref if contact_pref != "no preference" else None,
+                    )
+                    st.session_state.form_contact = form_contact
                     st.session_state.message_input = cleaned_msg
                     # Check for adaptive follow-up questions
                     questions = get_follow_up_questions(cleaned_msg)
@@ -454,7 +510,7 @@ with tab_intake:
                         st.rerun()
                     else:
                         # No follow-up questions required; proceed directly to triage submission
-                        _execute_triage(cleaned_msg, answers=None)
+                        _execute_triage(cleaned_msg, answers=None, contact=form_contact)
 
     # ------------------------------------------------------------------------
     # Step 2: Adaptive Intake Follow-up Questions
@@ -501,7 +557,11 @@ with tab_intake:
                 type="primary",
                 use_container_width=True,
             ):
-                _execute_triage(st.session_state.message_input, answers=answers)
+                _execute_triage(
+                    st.session_state.message_input,
+                    answers=answers,
+                    contact=st.session_state.form_contact,
+                )
 
     # ------------------------------------------------------------------------
     # Step 3: Triage Outcome & Review
@@ -515,6 +575,11 @@ with tab_intake:
                 st.session_state.message_input = ""
                 st.session_state.msg_text_area = ""
                 st.session_state.sample_selector = "-- Custom / Blank --"
+                st.session_state.form_contact = None
+                st.session_state.input_contact_name = ""
+                st.session_state.input_contact_phone = ""
+                st.session_state.input_contact_email = ""
+                st.session_state.select_contact_pref = "no preference"
                 st.rerun()
         else:
             result = record.result
@@ -573,19 +638,26 @@ with tab_intake:
                 name_str = contact.name or "Not provided"
                 phone_str = contact.phone or "Not provided"
                 email_str = contact.email or "Not provided"
+                pref_val = getattr(contact, "preferred_method", None)
+                pref_html = f"<br><strong>Preferred:</strong> {pref_val.title()}" if pref_val else ""
                 st.markdown(
                     f"""
                     <div class="clinical-card">
-                        <div class="clinical-card-header">👤 Extracted Patient Contact</div>
+                        <div class="clinical-card-header">👤 Patient Contact</div>
                         <div style="font-size: 0.9rem; line-height: 1.5; color: #334155;">
                             <strong>Name:</strong> {name_str}<br>
                             <strong>Phone:</strong> {phone_str}<br>
                             <strong>Email:</strong> {email_str}
+                            {pref_html}
                         </div>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
+
+            # Warning if no contact method exists
+            if not has_contact_method(result.contact):
+                st.warning("No contact details on file. Staff cannot reply to this patient.")
 
             # Follow-up Answers (if any)
             if result.follow_up:
@@ -612,6 +684,11 @@ with tab_intake:
                 st.session_state.msg_text_area = ""
                 st.session_state.sample_selector = "-- Custom / Blank --"
                 st.session_state.follow_up_qs = []
+                st.session_state.form_contact = None
+                st.session_state.input_contact_name = ""
+                st.session_state.input_contact_phone = ""
+                st.session_state.input_contact_email = ""
+                st.session_state.select_contact_pref = "no preference"
                 st.session_state.triage_record = None
                 st.session_state.triage_latency = 0.0
                 st.session_state.triage_error = None
@@ -672,11 +749,19 @@ with tab_queue:
                         st.markdown(f"**Suggested Specialty:** `{r.result.suggested_specialty}`")
                 with col_det2:
                     c = r.result.contact
+                    pref_info = (
+                        f" &nbsp;|&nbsp; **Pref:** {c.preferred_method.title()}"
+                        if getattr(c, "preferred_method", None)
+                        else ""
+                    )
                     st.markdown(
                         f"**Patient Contact:** {c.name or 'N/A'} &nbsp;|&nbsp; "
                         f"**Phone:** {c.phone or 'N/A'} &nbsp;|&nbsp; "
                         f"**Email:** {c.email or 'N/A'}"
+                        f"{pref_info}"
                     )
+                    if not has_contact_method(c):
+                        st.warning("No contact details on file. Staff cannot reply to this patient.")
 
                 # Intake Q&A if present
                 if r.result.follow_up:

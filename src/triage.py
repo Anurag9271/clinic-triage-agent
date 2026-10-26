@@ -15,6 +15,7 @@ from typing import Any, Final, Optional
 import ollama
 from pydantic import ValidationError
 
+from src.contact import merge_contact
 from src.intake_questions import (
     Question,
     evaluate_answers,
@@ -258,6 +259,7 @@ def call_llm(
 def triage_message_with_meta(
     message: str,
     answers: Optional[list[tuple[Question, str]] | list[FollowUpAnswer]] = None,
+    contact: Optional[Contact] = None,
     model: str = "llama3.2:3b",
     prompt_version: str = "v1",
     client: Optional[Any] = None,
@@ -274,6 +276,7 @@ def triage_message_with_meta(
     Args:
         message: Raw incoming patient message text.
         answers: Optional intake questions and answers.
+        contact: Optional explicit patient contact details from intake form.
         model: Ollama model identifier to use for LLM classification.
         prompt_version: Version identifier for system prompt template.
         client: Optional custom Ollama Client instance.
@@ -312,6 +315,12 @@ def triage_message_with_meta(
         else:
             active_red_flag = answers_red_flag
 
+        merged_contact = merge_contact(
+            form=contact,
+            message=message,
+            llm_contact=Contact(),
+        )
+
         emergency_result = TriageResult(
             intent=Intent.OTHER,
             urgency=Urgency.EMERGENCY,
@@ -319,7 +328,7 @@ def triage_message_with_meta(
             suggested_specialty=None,
             red_flag=active_red_flag,
             follow_up=follow_up_list,
-            contact=Contact(),
+            contact=merged_contact,
             summary=f"Emergency red flag detected: {active_red_flag.reason}",
             draft_reply=EMERGENCY_MESSAGE,
         )
@@ -357,11 +366,17 @@ def triage_message_with_meta(
         )
 
     routed_to = route(intent=llm_output.intent, urgency=llm_output.urgency)
+    merged_contact = merge_contact(
+        form=contact,
+        message=message,
+        llm_contact=llm_output.contact,
+    )
     triage_result = build_triage_result(
         llm_output=llm_output,
         route_to=routed_to,
         red_flag=active_red_flag,
         follow_up=follow_up_list,
+        contact=merged_contact,
     )
 
     elapsed = time.perf_counter() - start_time
@@ -375,6 +390,7 @@ def triage_message_with_meta(
 def triage_message(
     message: str,
     answers: Optional[list[tuple[Question, str]] | list[FollowUpAnswer]] = None,
+    contact: Optional[Contact] = None,
     model: str = "llama3.2:3b",
     prompt_version: str = "v1",
     client: Optional[Any] = None,
@@ -395,6 +411,7 @@ def triage_message(
         message: Raw incoming patient message text.
         answers: Optional intake questions and answers, either as (Question, str)
             tuples or validated FollowUpAnswer models.
+        contact: Optional explicit patient contact details from intake form.
         model: Ollama model identifier to use for LLM classification.
         prompt_version: Version identifier for system prompt template.
         client: Optional custom Ollama Client instance.
@@ -407,6 +424,7 @@ def triage_message(
     record, elapsed, _ = triage_message_with_meta(
         message=message,
         answers=answers,
+        contact=contact,
         model=model,
         prompt_version=prompt_version,
         client=client,

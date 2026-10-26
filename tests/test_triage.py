@@ -246,7 +246,7 @@ def test_triage_message_standard_flow(valid_llm_json: str):
     with patch("ollama.chat") as mock_chat:
         mock_chat.return_value = _make_chat_response(valid_llm_json)
 
-        message = "Hi, I would like to schedule an annual dermatology checkup."
+        message = "Hi, I would like to schedule an annual dermatology checkup. Jane Doe, 555-0199, jane@example.com."
         record, elapsed = triage_message(message=message)
 
         assert mock_chat.call_count == 1

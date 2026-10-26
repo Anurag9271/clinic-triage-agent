@@ -95,6 +95,10 @@ class Contact(BaseModel):
         default=None,
         description="Patient's email address if provided.",
     )
+    preferred_method: Optional[str] = Field(
+        default=None,
+        description="Patient's preferred contact method (phone, email, no preference) if provided.",
+    )
 
 
 class FollowUpAnswer(BaseModel):
@@ -233,6 +237,7 @@ def build_triage_result(
     route_to: RouteTo,
     red_flag: RedFlag,
     follow_up: list[FollowUpAnswer],
+    contact: Optional[Contact] = None,
 ) -> TriageResult:
     """Merge LLM extraction output with rule-based triage components.
 
@@ -241,6 +246,7 @@ def build_triage_result(
         route_to: Staff queue determined by deterministic routing rules.
         red_flag: Safety assessment determined by rule-based keyword detection.
         follow_up: List of intake follow-up questions and patient answers.
+        contact: Optional merged or validated Contact instance to override LLM contact.
 
     Returns:
         A consolidated TriageResult instance.
@@ -252,7 +258,7 @@ def build_triage_result(
         suggested_specialty=llm_output.suggested_specialty,
         red_flag=red_flag,
         follow_up=follow_up,
-        contact=llm_output.contact,
+        contact=contact if contact is not None else llm_output.contact,
         summary=llm_output.summary,
         draft_reply=llm_output.draft_reply,
     )

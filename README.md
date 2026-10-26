@@ -126,6 +126,7 @@ clinic-triage-agent/
 - Rule-based emergency escalation runs before any LLM call.
 - Safety-critical follow-up questions come from a fixed table, not the model.
 - A human approves every reply before it is sent.
+- Contact details come from form fields first, and LLM-extracted contact data is verified against the message text.
 
 ## Demo
 

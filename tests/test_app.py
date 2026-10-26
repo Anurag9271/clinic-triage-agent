@@ -283,3 +283,112 @@ def test_sample_message_selector_populates_text_area():
 
     assert not at.exception
     assert at.text_area(key="msg_text_area").value == expected_text
+
+
+def test_contact_in_form_overrides_message():
+    """Contact entered in the form overrides details present in the message text."""
+    at = AppTest.from_file(APP_PATH, default_timeout=30)
+    at.run()
+    assert not at.exception
+
+    mock_output = LLMTriageOutput(
+        intent=Intent.APPOINTMENT,
+        urgency=Urgency.ROUTINE,
+        suggested_specialty=None,
+        contact=Contact(name="Old Name", phone="555-0111", email="old@example.com"),
+        summary="Appointment request.",
+        draft_reply="Hello, we can help schedule your appointment.",
+    )
+
+    with patch("src.triage.call_llm_with_meta") as mock_llm:
+        mock_llm.return_value = (mock_output, {"attempts": 1, "latency_s": 0.2})
+
+        at.text_area(key="msg_text_area").input(
+            "Need appointment. Contact: Old Name, 555-0111, old@example.com"
+        ).run()
+        at.text_input(key="input_contact_name").input("Form Name").run()
+        at.text_input(key="input_contact_phone").input("555-9999").run()
+        at.text_input(key="input_contact_email").input("form@example.com").run()
+        at.button(key="btn_next").click().run()
+
+        assert not at.exception
+        assert at.session_state.step == 3
+        record = at.session_state.triage_record
+        assert record is not None
+        assert record.result.contact.name == "Form Name"
+        assert record.result.contact.phone == "555-9999"
+        assert record.result.contact.email == "form@example.com"
+
+
+def test_empty_contact_shows_warning_in_staff_queue(temp_database: Path):
+    """Empty contact shows the warning in the staff queue."""
+    rec = TriageRecord(
+        original_message="Hello, when are you open?",
+        result=TriageResult(
+            intent=Intent.GENERAL_QUERY,
+            urgency=Urgency.ROUTINE,
+            route_to=RouteTo.FRONT_DESK,
+            suggested_specialty=None,
+            red_flag=RedFlag(is_red_flag=False, reason=None),
+            follow_up=[],
+            contact=Contact(),
+            summary="Patient asks about clinic hours.",
+            draft_reply="Our clinic is open Monday through Friday 8am to 5pm.",
+        ),
+        status=RecordStatus.PENDING,
+    )
+    save_record(rec, "mock", "v1", 0.1, db_path=temp_database)
+
+    at = AppTest.from_file(APP_PATH, default_timeout=30)
+    at.run()
+    assert not at.exception
+
+    warning_texts = [w.value for w in at.warning]
+    assert any(
+        "No contact details on file. Staff cannot reply to this patient." in w
+        for w in warning_texts
+    )
+
+
+def test_invalid_email_blocks_submission_with_error():
+    """Invalid email blocks intake submission and displays an error message."""
+    at = AppTest.from_file(APP_PATH, default_timeout=30)
+    at.run()
+    assert not at.exception
+
+    at.text_area(key="msg_text_area").input("I would like to make an appointment.").run()
+    at.text_input(key="input_contact_email").input("bad-email-format").run()
+    at.button(key="btn_next").click().run()
+
+    assert not at.exception
+    # Submission blocked: should remain on Step 1
+    assert at.session_state.step == 1
+    error_texts = [e.value for e in at.error]
+    assert any("Invalid email format" in err for err in error_texts)
+
+
+def test_emergency_message_with_no_contact_still_shows_banner():
+    """An emergency message with no contact details still displays the emergency advisory banner."""
+    at = AppTest.from_file(APP_PATH, default_timeout=30)
+    at.run()
+    assert not at.exception
+
+    # Emergency message with zero contact details
+    at.text_area(key="msg_text_area").input(
+        "I have crushing chest pain and left arm numbness!"
+    ).run()
+    at.button(key="btn_next").click().run()
+
+    assert not at.exception
+    assert at.session_state.step == 3
+
+    # Verify emergency advisory banner is displayed
+    error_texts = [e.value for e in at.error]
+    assert any("EMERGENCY ADVISORY" in err for err in error_texts)
+
+    # Verify warning about missing contact is also displayed
+    warning_texts = [w.value for w in at.warning]
+    assert any(
+        "No contact details on file. Staff cannot reply to this patient." in w
+        for w in warning_texts
+    )
